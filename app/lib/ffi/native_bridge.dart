@@ -111,7 +111,7 @@ class MamadVPNFFI {
   /// Parse a Trojan URL and return the config JSON.
   String? parseTrojanUrl(String url) {
     final urlPtr = url.toNativeUtf8();
-    final outBuf = calloc<Utf8>(4096);
+    final outBuf = calloc<Uint8>(4096).cast<Utf8>();
     try {
       final len = _nativeParseTrojanUrl(urlPtr, outBuf, 4096);
       if (len < 0) return null;
@@ -138,7 +138,7 @@ class MamadVPNFFI {
 
   /// Get engine status as JSON.
   String? getStatus() {
-    final outBuf = calloc<Utf8>(1024);
+    final outBuf = calloc<Uint8>(1024).cast<Utf8>();
     try {
       final len = _nativeGetStatus(outBuf, 1024);
       if (len < 0) return null;
@@ -152,7 +152,7 @@ class MamadVPNFFI {
 
   /// Get recent logs as a JSON array string.
   String? getLogs() {
-    final outBuf = calloc<Utf8>(16384);
+    final outBuf = calloc<Uint8>(16384).cast<Utf8>();
     try {
       final len = _nativeGetLogs(outBuf, 16384);
       if (len < 0) return null;

@@ -42,7 +42,7 @@ class MamadVPNApp extends StatelessWidget {
             fontWeight: FontWeight.bold,
           ),
         ),
-        cardTheme: CardThemeData(
+        cardTheme: CardTheme(
           color: const Color(0xFF161B22),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
