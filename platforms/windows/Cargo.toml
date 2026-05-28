@@ -1,0 +1,20 @@
+[package]
+name = "mamadvpn-platform-windows"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Windows WinDivert packet interception backend for MamadVPN"
+
+[dependencies]
+mamadvpn-core = { path = "../../core" }
+mamadvpn-common = { path = "../../common" }
+
+tokio.workspace = true
+bytes.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windivert = "0.7.0-beta.4"
+winapi = { version = "0.3", features = ["winerror", "handleapi", "processthreadsapi"] }

@@ -1,0 +1,19 @@
+[package]
+name = "mamadvpn-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "C ABI and FFI bindings for MamadVPN - Flutter, Android JNI, and desktop app integration"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+mamadvpn-core = { path = "../core" }
+mamadvpn-common = { path = "../common" }
+mamadvpn-platform-android = { path = "../platforms/android" }
+
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+serde_json.workspace = true

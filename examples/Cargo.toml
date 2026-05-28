@@ -1,0 +1,25 @@
+[package]
+name = "mamadvpn-examples"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Example binaries and usage demonstrations for MamadVPN"
+
+[[bin]]
+name = "standalone"
+path = "src/standalone.rs"
+
+[[bin]]
+name = "demo-config"
+path = "src/demo_config.rs"
+
+[dependencies]
+mamadvpn-core = { path = "../core" }
+mamadvpn-common = { path = "../common" }
+
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde_json.workspace = true
+clap = { version = "4", features = ["derive"] }

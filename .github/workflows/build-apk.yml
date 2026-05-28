@@ -1,0 +1,143 @@
+# MamadVPN — Android APK Build
+#
+# Builds the native Rust library for all 4 Android ABIs, then packages
+# the Flutter app into a debug APK.  Uploads the APK as a build artifact.
+#
+# Triggers:
+#   - Push to main
+#   - Pull request to main
+#   - Manual dispatch (via GitHub Actions tab)
+#   - Tag push: v*
+
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  # Keep these in sync with .cargo/config.toml and app/android/app/build.gradle
+  FLUTTER_VERSION: "3.24.5"
+  ANDROID_SDK_VERSION: "34"
+  NDK_VERSION: "27.0.12077973"
+  RUST_TOOLCHAIN: "stable"
+
+jobs:
+  build-apk:
+    name: Build APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Checkout ───────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Rust toolchain ─────────────────────────────────────────
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: |
+            aarch64-linux-android
+            armv7-linux-androideabi
+            x86_64-linux-android
+            i686-linux-android
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      # Prevent stale `.cargo/config.toml` from interfering with CI
+      # (local hardcoded linker paths don't exist on the runner).
+      # `cargo ndk` handles linker config automatically, so this file
+      # would only cause issues. We remove it to be safe.
+      - name: Clear local cargo config (CI uses cargo-ndk instead)
+        run: |
+          if [ -f .cargo/config.toml ]; then
+            rm .cargo/config.toml
+            echo "Removed .cargo/config.toml (CI uses cargo-ndk for linker config)"
+          fi
+
+      # ── Java ───────────────────────────────────────────────────
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      # ── Android SDK + NDK ──────────────────────────────────────
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: |
+          yes | sdkmanager "platforms;android-${{ env.ANDROID_SDK_VERSION }}"
+          yes | sdkmanager "build-tools;${{ env.ANDROID_SDK_VERSION }}.0.0"
+          yes | sdkmanager "ndk;${{ env.NDK_VERSION }}"
+          yes | sdkmanager "platform-tools"
+
+      - name: Set ANDROID_HOME and NDK path
+        run: |
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+
+      # ── Flutter ────────────────────────────────────────────────
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        working-directory: app
+        run: flutter pub get
+
+      # ── Build native Rust library ──────────────────────────────
+      - name: Build native Rust library for Android
+        run: |
+          ./scripts/build-android.sh release
+
+      - name: Verify native libraries
+        run: |
+          echo "=== Native libraries ==="
+          find app/android/app/src/main/jniLibs -name "*.so" -type f -exec ls -lh {} \;
+
+      # ── Build Flutter APK ──────────────────────────────────────
+      - name: Build Flutter APK (debug)
+        working-directory: app
+        run: flutter build apk --debug
+
+      # ── Upload APK artifact ────────────────────────────────────
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mamadvpn-apk
+          path: app/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      # ── Summary ────────────────────────────────────────────────
+      - name: Print build summary
+        run: |
+          echo "## ✅ Build Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Artifact | Path |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| APK | \`app/build/app/outputs/flutter-apk/app-debug.apk\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Native libraries included:" >> $GITHUB_STEP_SUMMARY
+          find app/android/app/src/main/jniLibs -name "*.so" -type f -exec echo "- {} (\`$(du -h {} | cut -f1)\`)" \; >> $GITHUB_STEP_SUMMARY

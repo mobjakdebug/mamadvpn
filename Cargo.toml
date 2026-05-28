@@ -1,0 +1,55 @@
+[workspace]
+
+resolver = "2"
+
+members = [
+    "common",
+    "core",
+    "api",
+    "platforms/linux",
+    "platforms/android",
+    "platforms/windows",
+    "tests",
+    "examples",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "MamadVPN - TCP/TLS desynchronization-based censorship circumvention transport engine"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Zero-copy buffer management
+bytes = "1"
+
+# Fast synchronization primitives
+parking_lot = "0.12"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Structured logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Random generation
+rand = "0.8"
+
+# Packet manipulation (Linux)
+pnet = "0.35"
+pcap = "2"
+
+# Async traits
+async-trait = "0.1"
+
+# Hex encoding
+hex = "0.4"

@@ -1,0 +1,25 @@
+[package]
+name = "mamadvpn-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core transport engine for MamadVPN - connection state machine, bypass methods, async relay"
+
+[dependencies]
+mamadvpn-common = { path = "../common" }
+
+tokio.workspace = true
+bytes.workspace = true
+parking_lot.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+rand.workspace = true
+async-trait.workspace = true
+
+# TLS (Rustls - production safe default)
+rustls = { version = "0.23", features = ["ring"] }
+tokio-rustls = "0.26"
+webpki-roots = "0.26"
+rustls-pki-types = "1"
