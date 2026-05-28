@@ -25,6 +25,7 @@ class MamadVpnService : VpnService() {
     companion object {
         const val ACTION_CONNECT = "com.mamadvpn.action.CONNECT"
         const val ACTION_DISCONNECT = "com.mamadvpn.action.DISCONNECT"
+        const val CHANNEL_ID = "mamadvpn_vpn_channel"
 
         // Held as a static reference so the service can access it after binding
         var engineRef: FlutterEngine? = null
@@ -55,7 +56,6 @@ class MamadVpnService : VpnService() {
         // Build the VpnService.Builder — establishes the TUN virtual interface
         val builder = Builder()
             .setSession("MamadVPN")
-            .setConfigureIntent(null)
             .setMtu(1500)
             .addAddress("10.0.0.2", 32)
             .addRoute("0.0.0.0", 0)
@@ -158,7 +158,4 @@ class MamadVpnService : VpnService() {
             .build()
     }
 
-    companion object {
-        const val CHANNEL_ID = "mamadvpn_vpn_channel"
-    }
 }
