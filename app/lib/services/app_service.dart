@@ -123,9 +123,11 @@ class AppService {
       }
       _addLog('Engine initialized successfully');
 
+      final localProxyMode = _usesLocalProxyMode(_config);
+
       // ── Step 2: Start VpnService (Android only) ────────────
       // This is async — the TUN fd arrives later via onTunFd callback.
-      if (Platform.isAndroid) {
+      if (Platform.isAndroid && !localProxyMode) {
         // Save config to SharedPreferences before requesting VPN
         _addLog('Saving config to SharedPreferences...');
         try {
@@ -203,6 +205,9 @@ class AppService {
           ffi.shutdown();
           return false;
         }
+      } else if (Platform.isAndroid && localProxyMode) {
+        _addLog(
+            'Starting local proxy without Android VpnService (${_config.listenHost}:${_config.listenPort})');
       }
 
       // ── Step 5: Start the engine ───────────────────────────
@@ -278,6 +283,13 @@ class AppService {
 
   AppConfig parseTrojanUrl(String url) {
     return AppConfig.fromTrojanUrl(url);
+  }
+
+  bool _usesLocalProxyMode(AppConfig config) {
+    return config.connectionMode == ConnectionMode.sniOnly &&
+        (config.listenHost == '127.0.0.1' ||
+            config.listenHost == 'localhost' ||
+            config.listenHost == '::1');
   }
 
   Future<void> importConfigFromJson(String jsonString) async {

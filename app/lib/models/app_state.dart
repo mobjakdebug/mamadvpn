@@ -96,7 +96,9 @@ enum BypassMode {
 }
 
 /// Maps to Rust's DataMode enum
-enum DataMode { tls, http;
+enum DataMode {
+  tls,
+  http;
 
   String get displayName {
     switch (this) {
@@ -120,7 +122,10 @@ enum DataMode { tls, http;
 }
 
 /// Maps to Rust's TrojanTransport enum
-enum TrojanTransport { tcp, ws, grpc;
+enum TrojanTransport {
+  tcp,
+  ws,
+  grpc;
 
   String get displayName {
     switch (this) {
@@ -160,7 +165,9 @@ enum TrojanTransport { tcp, ws, grpc;
 }
 
 /// Maps to Rust's TlsConnectorBackend
-enum TlsConnectorBackend { rustls, custom;
+enum TlsConnectorBackend {
+  rustls,
+  custom;
 
   String get displayName {
     switch (this) {
@@ -193,7 +200,11 @@ enum TlsConnectorBackend { rustls, custom;
 }
 
 /// Maps to Rust's TlsFingerprintKind
-enum TlsFingerprintKind { chrome, firefox, android, random;
+enum TlsFingerprintKind {
+  chrome,
+  firefox,
+  android,
+  random;
 
   String get displayName {
     switch (this) {
@@ -300,48 +311,40 @@ class AppConfig {
     return AppConfig(
       connectionMode: ConnectionMode.fromString(
           json['connection_mode'] as String? ??
-          json['CONNECTION_MODE'] as String? ??
-          'SNI Only'),
-      bypassMode: BypassMode.fromString(
-          json['bypass_mode'] as String? ??
+              json['CONNECTION_MODE'] as String? ??
+              'SNI Only'),
+      bypassMode: BypassMode.fromString(json['bypass_mode'] as String? ??
           json['BYPASS_MODE'] as String? ??
           'wrong_seq'),
-      dataMode: DataMode.fromString(
-          json['data_mode'] as String? ??
+      dataMode: DataMode.fromString(json['data_mode'] as String? ??
           json['DATA_MODE'] as String? ??
           'tls'),
       listenHost: json['listen_host'] as String? ??
           json['LISTEN_HOST'] as String? ??
           '0.0.0.0',
-      listenPort: json['listen_port'] as int? ??
-          json['LISTEN_PORT'] as int? ??
-          40443,
+      listenPort:
+          json['listen_port'] as int? ?? json['LISTEN_PORT'] as int? ?? 40443,
       connectHost: json['connect_host'] as String? ??
           json['connectHost'] as String? ??
           json['CONNECT_IP'] as String? ??
           '104.19.229.21',
-      connectPort: json['connect_port'] as int? ??
-          json['CONNECT_PORT'] as int? ??
-          443,
+      connectPort:
+          json['connect_port'] as int? ?? json['CONNECT_PORT'] as int? ?? 443,
       fakeSni: json['fake_sni'] as String? ??
           json['FAKE_SNI'] as String? ??
           'hcaptcha.com',
-      socksPort: json['socks_port'] as int? ??
-          json['SOCKS_PORT'] as int? ??
-          10808,
-      httpPort: json['http_port'] as int? ??
-          json['HTTP_PORT'] as int? ??
-          10809,
+      socksPort:
+          json['socks_port'] as int? ?? json['SOCKS_PORT'] as int? ?? 10808,
+      httpPort: json['http_port'] as int? ?? json['HTTP_PORT'] as int? ?? 10809,
       trojanPassword: json['trojan_password'] as String? ??
           json['TROJAN_PASSWORD'] as String? ??
           '',
-      trojanSni: json['trojan_sni'] as String? ??
-          json['TROJAN_SNI'] as String? ??
-          '',
+      trojanSni:
+          json['trojan_sni'] as String? ?? json['TROJAN_SNI'] as String? ?? '',
       trojanTransport: TrojanTransport.fromString(
           json['trojan_transport'] as String? ??
-          json['TROJAN_TRANSPORT'] as String? ??
-          'tcp'),
+              json['TROJAN_TRANSPORT'] as String? ??
+              'tcp'),
       trojanPath: json['trojan_path'] as String? ??
           json['TROJAN_PATH'] as String? ??
           '',
@@ -363,9 +366,8 @@ class AppConfig {
       psiphonLicense: json['psiphon_license'] as String? ??
           json['PSIPHON_LICENSE'] as String? ??
           '',
-      tlsEnabled: json['tls_enabled'] as bool? ??
-          json['TLS_ENABLED'] as bool? ??
-          true,
+      tlsEnabled:
+          json['tls_enabled'] as bool? ?? json['TLS_ENABLED'] as bool? ?? true,
       tlsVerifyCerts: json['tls_verify_certs'] as bool? ??
           json['TLS_VERIFY_CERTS'] as bool? ??
           true,
@@ -374,45 +376,45 @@ class AppConfig {
           'h2,http/1.1',
       tlsConnector: TlsConnectorBackend.fromString(
           json['tls_connector'] as String? ??
-          json['TLS_CONNECTOR'] as String? ??
-          'custom'),
+              json['TLS_CONNECTOR'] as String? ??
+              'custom'),
       tlsFingerprint: TlsFingerprintKind.fromString(
           json['tls_fingerprint'] as String? ??
-          json['TLS_FINGERPRINT'] as String? ??
-          'chrome'),
-      tlsSni: json['tls_sni'] as String? ??
-          json['TLS_SNI'] as String?,
+              json['TLS_FINGERPRINT'] as String? ??
+              'chrome'),
+      tlsSni: json['tls_sni'] as String? ?? json['TLS_SNI'] as String?,
     );
   }
 
   Map<String, dynamic> toJson() => {
-    'connection_mode': connectionMode.rustName,
-    'bypass_mode': bypassMode.displayName.replaceAll(' ', '_').toLowerCase(),
-    'data_mode': dataMode.displayName.toLowerCase(),
-    'LISTEN_HOST': listenHost,
-    'LISTEN_PORT': listenPort,
-    'CONNECT_IP': connectHost,
-    'CONNECT_PORT': connectPort,
-    'FAKE_SNI': fakeSni,
-    'socks_port': socksPort,
-    'http_port': httpPort,
-    'trojan_password': trojanPassword,
-    'trojan_sni': trojanSni,
-    'trojan_transport': trojanTransport.rustName,
-    'trojan_path': trojanPath,
-    'trojan_host': trojanHost,
-    'warp_endpoint': warpEndpoint,
-    'warp_license': warpLicense,
-    'psiphon_country': psiphonCountry,
-    'psiphon_endpoint': psiphonEndpoint,
-    'psiphon_license': psiphonLicense,
-    'tls_enabled': tlsEnabled,
-    'tls_verify_certs': tlsVerifyCerts,
-    'tls_alpn': tlsAlpn,
-    'tls_connector': tlsConnector.rustName,
-    'tls_fingerprint': tlsFingerprint.rustName,
-    'tls_sni': tlsSni,
-  };
+        'connection_mode': connectionMode.rustName,
+        'bypass_mode':
+            bypassMode.displayName.replaceAll(' ', '_').toLowerCase(),
+        'data_mode': dataMode.displayName.toLowerCase(),
+        'LISTEN_HOST': listenHost,
+        'LISTEN_PORT': listenPort,
+        'CONNECT_IP': connectHost,
+        'CONNECT_PORT': connectPort,
+        'FAKE_SNI': fakeSni,
+        'socks_port': socksPort,
+        'http_port': httpPort,
+        'trojan_password': trojanPassword,
+        'trojan_sni': trojanSni,
+        'trojan_transport': trojanTransport.rustName,
+        'trojan_path': trojanPath,
+        'trojan_host': trojanHost,
+        'warp_endpoint': warpEndpoint,
+        'warp_license': warpLicense,
+        'psiphon_country': psiphonCountry,
+        'psiphon_endpoint': psiphonEndpoint,
+        'psiphon_license': psiphonLicense,
+        'tls_enabled': tlsEnabled,
+        'tls_verify_certs': tlsVerifyCerts,
+        'tls_alpn': tlsAlpn,
+        'tls_connector': tlsConnector.rustName,
+        'tls_fingerprint': tlsFingerprint.rustName,
+        'tls_sni': tlsSni,
+      };
 
   String toJsonString() => jsonEncode(toJson());
 
@@ -503,15 +505,19 @@ class AppConfig {
       host = host.substring(0, colonIndex);
     }
 
+    final isLocalProxy =
+        host == '127.0.0.1' || host == 'localhost' || host == '::1';
+
     final config = AppConfig(
-      connectionMode: ConnectionMode.trojan,
+      connectionMode:
+          isLocalProxy ? ConnectionMode.sniOnly : ConnectionMode.trojan,
       trojanPassword: password,
       trojanSni: host,
       trojanHost: host,
-      listenHost: '127.0.0.1',
-      listenPort: 40443,
-      connectHost: '127.0.0.1',
-      connectPort: port,
+      listenHost: isLocalProxy ? '127.0.0.1' : '0.0.0.0',
+      listenPort: isLocalProxy ? port : 40443,
+      connectHost: isLocalProxy ? '104.19.229.21' : host,
+      connectPort: isLocalProxy ? 443 : port,
       fakeSni: host,
     );
 
@@ -524,6 +530,8 @@ class AppConfig {
         case 'sni':
           config.trojanSni = v;
           config.trojanHost = v;
+          config.fakeSni = v;
+          config.tlsSni = v;
           break;
         case 'security':
           config.tlsEnabled = v == 'tls';
@@ -536,6 +544,9 @@ class AppConfig {
           break;
         case 'host':
           config.trojanHost = v;
+          if (config.fakeSni == host) {
+            config.fakeSni = v;
+          }
           break;
         case 'insecure':
         case 'allowInsecure':
@@ -573,13 +584,17 @@ class EngineStats {
 
   String get formattedTx {
     if (txBytes < 1024) return '$txBytes B';
-    if (txBytes < 1024 * 1024) return '${(txBytes / 1024).toStringAsFixed(1)} KB';
+    if (txBytes < 1024 * 1024) {
+      return '${(txBytes / 1024).toStringAsFixed(1)} KB';
+    }
     return '${(txBytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 
   String get formattedRx {
     if (rxBytes < 1024) return '$rxBytes B';
-    if (rxBytes < 1024 * 1024) return '${(rxBytes / 1024).toStringAsFixed(1)} KB';
+    if (rxBytes < 1024 * 1024) {
+      return '${(rxBytes / 1024).toStringAsFixed(1)} KB';
+    }
     return '${(rxBytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 

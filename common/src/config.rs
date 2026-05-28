@@ -356,18 +356,18 @@ impl AppConfig {
 
     /// Parse a Trojan share URL (trojan://...).
     pub fn from_trojan_url(url: &str) -> Result<Self, CommonError> {
-        let url = url.strip_prefix("trojan://").ok_or_else(|| {
-            CommonError::Config("Not a valid trojan:// URL".into())
-        })?;
+        let url = url
+            .strip_prefix("trojan://")
+            .ok_or_else(|| CommonError::Config("Not a valid trojan:// URL".into()))?;
 
         let (password_host, fragment) = match url.split_once('#') {
             Some((ph, f)) => (ph, Some(f)),
             None => (url, None),
         };
 
-        let (password, host_port_query) = password_host.split_once('@').ok_or_else(|| {
-            CommonError::Config("Missing @ in trojan URL".into())
-        })?;
+        let (password, host_port_query) = password_host
+            .split_once('@')
+            .ok_or_else(|| CommonError::Config("Missing @ in trojan URL".into()))?;
 
         let (host_port, query) = match host_port_query.split_once('?') {
             Some((hp, q)) => (hp, Some(q)),
@@ -376,16 +376,30 @@ impl AppConfig {
 
         let (host, port_str) = host_port.split_once(':').unwrap_or((host_port, "443"));
         let port: u16 = port_str.parse().unwrap_or(443);
+        let host_is_local_proxy = matches!(host, "127.0.0.1" | "localhost" | "::1");
 
         let mut config = AppConfig {
-            connection_mode: ConnectionMode::Trojan,
+            connection_mode: if host_is_local_proxy {
+                ConnectionMode::SniOnly
+            } else {
+                ConnectionMode::Trojan
+            },
             trojan_password: password.to_string(),
             trojan_sni: host.to_string(),
             trojan_host: host.to_string(),
-            listen_host: "127.0.0.1".parse().unwrap(),
-            listen_port: 40443,
-            connect_host: "127.0.0.1".parse().unwrap(),
-            connect_port: port,
+            listen_host: if host_is_local_proxy {
+                "127.0.0.1".parse().unwrap()
+            } else {
+                AppConfig::default().listen_host
+            },
+            listen_port: if host_is_local_proxy { port } else { 40443 },
+            connect_host: if host_is_local_proxy {
+                AppConfig::default().connect_host
+            } else {
+                host.parse()
+                    .unwrap_or_else(|_| AppConfig::default().connect_host)
+            },
+            connect_port: if host_is_local_proxy { 443 } else { port },
             fake_sni: host.to_string(),
             bypass_mode: BypassMethod::WrongSeq,
             data_mode: DataMode::Tls,
@@ -400,6 +414,7 @@ impl AppConfig {
                         "sni" => {
                             config.trojan_sni = v.to_string();
                             config.tls_sni = Some(v.to_string());
+                            config.fake_sni = v.to_string();
                         }
                         "security" => {
                             config.tls_enabled = v == "tls";
@@ -413,7 +428,12 @@ impl AppConfig {
                             config.data_mode = DataMode::Tls;
                         }
                         "path" => config.trojan_path = urlencoding_decode(v),
-                        "host" => config.trojan_host = v.to_string(),
+                        "host" => {
+                            config.trojan_host = v.to_string();
+                            if config.fake_sni == host {
+                                config.fake_sni = v.to_string();
+                            }
+                        }
                         "insecure" | "allowInsecure" => {
                             config.tls_verify_certs = v != "1" && v != "true";
                         }
@@ -653,13 +673,18 @@ mod tests {
     fn test_trojan_url_parse() {
         let url = "trojan://humanity@127.0.0.1:40443?security=tls&sni=www.multiplydose.com&insecure=0&allowInsecure=0&type=ws&path=%2Fassignment#%40V2raysCollector%20%F0%9F%92%98";
         let config = AppConfig::from_trojan_url(url).unwrap();
-        assert_eq!(config.connection_mode, ConnectionMode::Trojan);
+        assert_eq!(config.connection_mode, ConnectionMode::SniOnly);
         assert_eq!(config.trojan_password, "humanity");
         assert_eq!(config.trojan_sni, "www.multiplydose.com");
         assert_eq!(config.trojan_transport, TrojanTransport::Ws);
         assert_eq!(config.trojan_path, "/assignment");
         assert_eq!(config.trojan_host, "www.multiplydose.com");
         assert_eq!(config.tls_sni, Some("www.multiplydose.com".into()));
-        assert!(!config.tls_verify_certs);
+        assert_eq!(config.listen_host, "127.0.0.1".parse().unwrap());
+        assert_eq!(config.listen_port, 40443);
+        assert_eq!(config.connect_host, AppConfig::default().connect_host);
+        assert_eq!(config.connect_port, 443);
+        assert_eq!(config.fake_sni, "www.multiplydose.com");
+        assert!(config.tls_verify_certs);
     }
 }
