@@ -293,7 +293,7 @@ class AppConfig {
     this.tlsAlpn = 'h2,http/1.1',
     this.tlsConnector = TlsConnectorBackend.custom,
     this.tlsFingerprint = TlsFingerprintKind.chrome,
-    this.tlsSni = null,
+    this.tlsSni,
   });
 
   factory AppConfig.fromJson(Map<String, dynamic> json) {

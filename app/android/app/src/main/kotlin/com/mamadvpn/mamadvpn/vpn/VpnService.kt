@@ -61,12 +61,12 @@ class MamadVpnService : VpnService() {
             .addRoute("0.0.0.0", 0)
             .addDnsServer("8.8.8.8")
             .addDnsServer("1.1.1.1")
-            .setBlocking(true)
+            .setBlocking(false)
 
-        // Add the app package to allowed apps (split-tunnel) so the local
-        // proxy ports remain accessible without VPN routing
+        // Exclude this app from its own VPN route so native outbound sockets
+        // cannot be captured recursively by the TUN interface.
         try {
-            builder.addAllowedApplication(packageName)
+            builder.addDisallowedApplication(packageName)
         } catch (_: Exception) {
             // Ignore on older API versions
         }

@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import '../models/app_state.dart';
 import '../services/app_service.dart';
@@ -191,8 +189,8 @@ class _ConfigScreenState extends State<ConfigScreen> {
                             fillColor: const Color(0xFF0D1117),
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(8),
-                              borderSide: const BorderSide(
-                                  color: Color(0xFF30363D)),
+                              borderSide:
+                                  const BorderSide(color: Color(0xFF30363D)),
                             ),
                             contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 12, vertical: 10),
@@ -213,8 +211,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
                         child: const Text(
                           'Import',
                           style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600),
+                              color: Colors.white, fontWeight: FontWeight.w600),
                         ),
                       ),
                     ],
@@ -368,16 +365,16 @@ class _ConfigScreenState extends State<ConfigScreen> {
           ),
           const Spacer(),
           SegmentedButton<TrojanTransport>(
-            segments: [
+            segments: const [
               ButtonSegment(
                   value: TrojanTransport.tcp,
-                  label: const Text('TCP', style: TextStyle(fontSize: 12))),
+                  label: Text('TCP', style: TextStyle(fontSize: 12))),
               ButtonSegment(
                   value: TrojanTransport.ws,
-                  label: const Text('WS', style: TextStyle(fontSize: 12))),
+                  label: Text('WS', style: TextStyle(fontSize: 12))),
               ButtonSegment(
                   value: TrojanTransport.grpc,
-                  label: const Text('gRPC', style: TextStyle(fontSize: 11))),
+                  label: Text('gRPC', style: TextStyle(fontSize: 11))),
             ],
             selected: {_config.trojanTransport},
             onSelectionChanged: (v) {

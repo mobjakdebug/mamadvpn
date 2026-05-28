@@ -468,6 +468,13 @@ fn set_tun_fd_inner(fd: i32) -> i32 {
         return -1;
     }
 
+    if !android_tun_forwarding_ready() {
+        log_info!(
+            "Android TUN forwarding is disabled: packet-to-socket forwarding is not implemented"
+        );
+        return -2;
+    }
+
     log_info!("Creating TUN interceptor for fd {}", fd);
 
     unsafe {
@@ -502,6 +509,10 @@ fn set_tun_fd_inner(fd: i32) -> i32 {
     }
 
     0
+}
+
+fn android_tun_forwarding_ready() -> bool {
+    false
 }
 
 /// Called when Android VpnService permission result is available.

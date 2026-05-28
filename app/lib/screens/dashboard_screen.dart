@@ -93,8 +93,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final isRunning = _vpnState == VpnState.connected;
-    final isBusy = _vpnState == VpnState.connecting ||
-        _vpnState == VpnState.disconnecting;
+    final isBusy =
+        _vpnState == VpnState.connecting || _vpnState == VpnState.disconnecting;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0D1117),
@@ -162,10 +162,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           Container(
             padding: const EdgeInsets.all(28),
             decoration: BoxDecoration(
-              gradient: LinearGradient(
+              gradient: const LinearGradient(
                 colors: [
-                  const Color(0xFF1A2332),
-                  const Color(0xFF161B22),
+                  Color(0xFF1A2332),
+                  Color(0xFF161B22),
                 ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
@@ -217,8 +217,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         boxShadow: isRunning
                             ? [
                                 BoxShadow(
-                                  color: const Color(0xFF00E676)
-                                      .withOpacity(0.3),
+                                  color:
+                                      const Color(0xFF00E676).withOpacity(0.3),
                                   blurRadius: 20,
                                   spreadRadius: 2,
                                 ),
@@ -264,17 +264,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      _detailChip(Icons.arrow_downward, 'Local',
-                          '${_service.config.listenHost}:${_service.config.listenPort}'),
+                      Expanded(
+                        child: _detailChip(Icons.arrow_downward, 'Local',
+                            '${_service.config.listenHost}:${_service.config.listenPort}'),
+                      ),
                       const Padding(
                         padding: EdgeInsets.symmetric(horizontal: 12),
                         child: Icon(Icons.arrow_forward,
                             color: Color(0xFF30363D), size: 18),
                       ),
-                      _detailChip(Icons.public, 'Remote',
-                          '${_service.config.connectHost}:${_service.config.connectPort}'),
+                      Expanded(
+                        child: _detailChip(Icons.public, 'Remote',
+                            '${_service.config.connectHost}:${_service.config.connectPort}'),
+                      ),
                     ],
                   ),
                 ),
@@ -365,11 +368,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 _infoRow('Fake SNI', _service.config.fakeSni),
                 _infoRow('SOCKS', '127.0.0.1:${_service.config.socksPort}'),
                 _infoRow('HTTP', '127.0.0.1:${_service.config.httpPort}'),
-                if (_service.config.connectionMode == ConnectionMode.trojan) ...[
+                if (_service.config.connectionMode ==
+                    ConnectionMode.trojan) ...[
                   const Divider(color: Color(0xFF30363D), height: 16),
                   _infoRow('Trojan', _service.config.trojanSni),
-                  _infoRow('Transport',
-                      _service.config.trojanTransport.displayName),
+                  _infoRow(
+                      'Transport', _service.config.trojanTransport.displayName),
                   if (_service.config.trojanPath.isNotEmpty)
                     _infoRow('Path', _service.config.trojanPath),
                 ],
@@ -393,12 +397,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
             fontSize: 11,
           ),
         ),
-        Text(
-          value,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
+        Tooltip(
+          message: value,
+          child: Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
       ],
@@ -411,19 +421,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            label,
-            style: const TextStyle(
-              color: Color(0xFF8B949E),
-              fontSize: 13,
+          Flexible(
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: Color(0xFF8B949E),
+                fontSize: 13,
+              ),
             ),
           ),
-          Text(
-            value,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
+          const SizedBox(width: 12),
+          Flexible(
+            flex: 2,
+            child: Tooltip(
+              message: value,
+              child: Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.end,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
             ),
           ),
         ],

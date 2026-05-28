@@ -142,8 +142,8 @@ class AppService {
         // Request VPN permission — starts VpnService
         _addLog('Requesting VPN permission...');
         try {
-          final granted = await _channel.invokeMethod<bool>(
-              'requestVpn', {'config': configJson});
+          final granted = await _channel
+              .invokeMethod<bool>('requestVpn', {'config': configJson});
 
           if (granted != true) {
             _updateState(VpnState.error);
@@ -171,7 +171,15 @@ class AppService {
           final setResult = ffi.setTunFd(tunFd);
           if (setResult != 0) {
             _updateState(VpnState.error);
-            _addLog('Failed to set TUN fd ($setResult)');
+            if (setResult == -2) {
+              _addLog(
+                  'Android full-VPN packet forwarding is not available in this build');
+            } else {
+              _addLog('Failed to set TUN fd ($setResult)');
+            }
+            try {
+              await _channel.invokeMethod('stopVpn');
+            } catch (_) {}
             ffi.shutdown();
             return false;
           }
@@ -179,11 +187,17 @@ class AppService {
         } on TimeoutException {
           _updateState(VpnState.error);
           _addLog('Timed out waiting for TUN interface');
+          try {
+            await _channel.invokeMethod('stopVpn');
+          } catch (_) {}
           ffi.shutdown();
           return false;
         } catch (e) {
           _updateState(VpnState.error);
           _addLog('TUN fd error: $e');
+          try {
+            await _channel.invokeMethod('stopVpn');
+          } catch (_) {}
           ffi.shutdown();
           return false;
         }

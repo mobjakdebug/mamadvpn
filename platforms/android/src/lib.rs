@@ -206,12 +206,16 @@ impl PacketInterceptor for TunInterceptor {
 
             let raw_packet = Bytes::copy_from_slice(&buf[..n]);
 
-            // Parse the raw IP packet
+            // Parse the raw IP packet.
+            //
+            // A TUN fd is not a raw network socket. Packets read from it are
+            // outbound packets from Android apps, while packets written to it
+            // are delivered back inbound to Android. Writing unparseable or
+            // outbound packets back to the same fd creates a loop/blackhole.
             let parsed = match CapturedPacket::from_raw(raw_packet.clone()) {
                 Ok(p) => p,
                 Err(_) => {
-                    // Non-TCP or unparseable — forward to TUN
-                    write_to_tun(tun_fd, &raw_packet);
+                    tracing::debug!("Dropping non-TCP or unparseable TUN packet");
                     continue;
                 }
             };
@@ -287,20 +291,26 @@ impl PacketInterceptor for TunInterceptor {
             // Apply the action to the TUN fd
             match action {
                 PacketAction::Forward => {
-                    // Write the original packet back to TUN
-                    write_to_tun(tun_fd, &raw_packet);
+                    // Only inbound packets should be written to TUN. Outbound
+                    // packets require a protected socket/NAT data plane, which
+                    // this interceptor does not provide yet.
+                    if !is_outbound {
+                        write_to_tun(tun_fd, &raw_packet);
+                    }
                 }
                 PacketAction::Drop => {
                     // Do not forward
                 }
                 PacketAction::Modify(modified) => {
-                    // Write modified version instead of original
-                    write_to_tun(tun_fd, &modified);
+                    if !is_outbound {
+                        write_to_tun(tun_fd, &modified);
+                    }
                 }
                 PacketAction::Inject(injected) => {
-                    // Write original AND the injected packet
-                    write_to_tun(tun_fd, &raw_packet);
-                    write_to_tun(tun_fd, &injected);
+                    if !is_outbound {
+                        write_to_tun(tun_fd, &raw_packet);
+                        write_to_tun(tun_fd, &injected);
+                    }
                 }
             }
         }
