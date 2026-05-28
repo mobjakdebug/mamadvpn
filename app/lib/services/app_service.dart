@@ -44,6 +44,7 @@ class AppService {
   // The TUN fd arrives asynchronously via the onTunFd MethodChannel
   // callback.  We use a Completer to wait for it before calling start().
   Completer<int>? _tunFdCompleter;
+  bool _stopRequestedByUser = false;
 
   AppService._() {
     _channel.setMethodCallHandler(_handleMethodCall);
@@ -91,6 +92,7 @@ class AppService {
   // ── Lifecycle ──────────────────────────────────────────────────
 
   Future<bool> startVpn() async {
+    _stopRequestedByUser = false;
     _updateState(VpnState.connecting);
 
     // ── Guard: ensure native library is loaded ────────────────
@@ -227,6 +229,7 @@ class AppService {
   }
 
   Future<void> stopVpn() async {
+    _stopRequestedByUser = true;
     _updateState(VpnState.disconnecting);
 
     try {
@@ -365,7 +368,9 @@ class AppService {
         _addLog('VPN state: $state');
         break;
       case 'onDisconnected':
-        _updateState(VpnState.disconnected);
+        if (_stopRequestedByUser || _vpnState == VpnState.connected) {
+          _updateState(VpnState.disconnected);
+        }
         _addLog('VPN disconnected by system');
         break;
     }

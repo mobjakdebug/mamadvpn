@@ -512,7 +512,7 @@ fn set_tun_fd_inner(fd: i32) -> i32 {
 }
 
 fn android_tun_forwarding_ready() -> bool {
-    false
+    true
 }
 
 /// Called when Android VpnService permission result is available.
