@@ -137,9 +137,40 @@ fn get_status_json() -> String {
 // C API — Lifecycle
 // ---------------------------------------------------------------------------
 
+/// Helper: extract panic message from a panic payload and log it.
+fn handle_panic(panic_info: Box<dyn std::any::Any + Send>, context: &str) -> i32 {
+    let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = panic_info.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic".to_string()
+    };
+    tracing::error!("{context} panicked: {msg}");
+    append_log(format!("FATAL: {context} panicked: {msg}"));
+    -1
+}
+
+/// Helper: wrap a fallible FFI function in catch_unwind for process safety.
+macro_rules! catch_ffi_panic {
+    ($context:expr, $body:expr) => {{
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
+            Ok(result) => result,
+            Err(panic_info) => handle_panic(panic_info, $context),
+        }
+    }};
+}
+
 /// Initialize with full AppConfig JSON.
+///
+/// Wrapped in `catch_unwind` to prevent Rust panics (e.g. from third-party
+/// crate initialization) from crashing the Android process across FFI.
 #[no_mangle]
 pub extern "C" fn mamadvpn_init(config_json: *const std::os::raw::c_char) -> i32 {
+    catch_ffi_panic!("mamadvpn_init", init_inner(config_json))
+}
+
+fn init_inner(config_json: *const std::os::raw::c_char) -> i32 {
     let config_str = match unsafe { CStr::from_ptr(config_json) }.to_str() {
         Ok(s) => s,
         Err(_) => return -1,
@@ -184,6 +215,10 @@ pub extern "C" fn mamadvpn_init(config_json: *const std::os::raw::c_char) -> i32
 /// Otherwise it runs in listener mode (binds TCP listener → relay).
 #[no_mangle]
 pub extern "C" fn mamadvpn_start() -> i32 {
+    catch_ffi_panic!("mamadvpn_start", start_inner())
+}
+
+fn start_inner() -> i32 {
     if ENGINE_INITIALIZED.load(Ordering::SeqCst) == 0 {
         return -1;
     }
@@ -424,6 +459,10 @@ pub extern "C" fn mamadvpn_clear_logs() -> i32 {
 /// Must be called after `mamadvpn_init()` and before `mamadvpn_start()`.
 #[no_mangle]
 pub extern "C" fn mamadvpn_set_tun_fd(fd: i32) -> i32 {
+    catch_ffi_panic!("mamadvpn_set_tun_fd", set_tun_fd_inner(fd))
+}
+
+fn set_tun_fd_inner(fd: i32) -> i32 {
     if ENGINE_INITIALIZED.load(Ordering::SeqCst) == 0 {
         log_info!("TUN fd set called before engine init");
         return -1;

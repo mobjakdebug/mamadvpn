@@ -11,7 +11,7 @@ import '../models/app_state.dart';
 class AppService {
   static AppService? _instance;
 
-  late MamadVPNFFI _ffi;
+  MamadVPNFFI? _ffi;
 
   // ── State streams ──────────────────────────────────────────────
 
@@ -56,7 +56,9 @@ class AppService {
 
   Future<void> initialize() async {
     try {
-      _ffi = MamadVPNFFI.instance;
+      final ffi = MamadVPNFFI.instance;
+      _ffi = ffi;
+      _addLog('Native library loaded successfully');
 
       // Load config from asset or use default
       _config = AppConfig();
@@ -66,9 +68,11 @@ class AppService {
       if (await file.exists()) {
         final json = jsonDecode(await file.readAsString());
         _config = AppConfig.fromJson(json);
+        _addLog('Loaded persistent config');
       }
     } catch (e) {
       _addLog('Initialization error: $e');
+      // _ffi will remain null — startVpn() will detect this
     }
   }
 
@@ -89,41 +93,68 @@ class AppService {
   Future<bool> startVpn() async {
     _updateState(VpnState.connecting);
 
+    // ── Guard: ensure native library is loaded ────────────────
+    final ffi = _ffi;
+    if (ffi == null) {
+      _updateState(VpnState.error);
+      _addLog('Native library not loaded — initialization failed');
+      return false;
+    }
+
     try {
       // ── Step 1: Initialize the Rust engine ──────────────────
       _addLog('Initializing engine...');
-      final initResult = _ffi.init(_config.toJsonString());
+      final configJson = _config.toJsonString();
+      _addLog('Config: $configJson');
+      final initResult = ffi.init(configJson);
       if (initResult != 0) {
         _updateState(VpnState.error);
         _addLog('Engine init failed (code: $initResult)');
         // Try to get Rust-side logs for more detail
         try {
-          final logsJson = _ffi.getLogs();
+          final logsJson = ffi.getLogs();
           if (logsJson != null && logsJson.isNotEmpty) {
             _addLog('Rust logs: $logsJson');
           }
         } catch (_) {}
         return false;
       }
+      _addLog('Engine initialized successfully');
 
       // ── Step 2: Start VpnService (Android only) ────────────
       // This is async — the TUN fd arrives later via onTunFd callback.
       if (Platform.isAndroid) {
         // Save config to SharedPreferences before requesting VPN
-        final configJson = _config.toJsonString();
-        await _channel.invokeMethod('saveConfig', configJson);
+        _addLog('Saving config to SharedPreferences...');
+        try {
+          await _channel.invokeMethod('saveConfig', configJson);
+          _addLog('Config saved');
+        } catch (e) {
+          _updateState(VpnState.error);
+          _addLog('Failed to save config: $e');
+          ffi.shutdown();
+          return false;
+        }
 
         // Create completer to wait for TUN fd
         _tunFdCompleter = Completer<int>();
 
         // Request VPN permission — starts VpnService
-        final granted = await _channel.invokeMethod<bool>(
-            'requestVpn', {'config': configJson});
+        _addLog('Requesting VPN permission...');
+        try {
+          final granted = await _channel.invokeMethod<bool>(
+              'requestVpn', {'config': configJson});
 
-        if (granted != true) {
+          if (granted != true) {
+            _updateState(VpnState.error);
+            _addLog('VPN permission denied');
+            ffi.shutdown(); // Clean up engine
+            return false;
+          }
+        } catch (e) {
           _updateState(VpnState.error);
-          _addLog('VPN permission denied');
-          _ffi.shutdown(); // Clean up engine
+          _addLog('VPN permission request failed: $e');
+          ffi.shutdown();
           return false;
         }
 
@@ -136,28 +167,37 @@ class AppService {
           _addLog('TUN fd received: $tunFd');
 
           // ── Step 4: Set TUN fd on engine ───────────────────
-          final setResult = _ffi.setTunFd(tunFd);
+          _addLog('Setting TUN fd on engine...');
+          final setResult = ffi.setTunFd(tunFd);
           if (setResult != 0) {
             _updateState(VpnState.error);
             _addLog('Failed to set TUN fd ($setResult)');
+            ffi.shutdown();
             return false;
           }
+          _addLog('TUN fd set successfully');
         } on TimeoutException {
           _updateState(VpnState.error);
           _addLog('Timed out waiting for TUN interface');
-          _ffi.shutdown();
+          ffi.shutdown();
+          return false;
+        } catch (e) {
+          _updateState(VpnState.error);
+          _addLog('TUN fd error: $e');
+          ffi.shutdown();
           return false;
         }
       }
 
       // ── Step 5: Start the engine ───────────────────────────
       _addLog('Starting engine...');
-      final startResult = _ffi.start();
+      final startResult = ffi.start();
       if (startResult != 0) {
         _updateState(VpnState.error);
         _addLog('Engine start failed ($startResult)');
         return false;
       }
+      _addLog('Engine started');
 
       _updateState(VpnState.connected);
       _addLog('VPN started (${_config.connectionMode.displayName})');
@@ -179,9 +219,12 @@ class AppService {
       _stopPolling();
 
       // Stop the Rust engine first (signals the interceptor loop to exit)
-      _addLog('Stopping engine...');
-      _ffi.stop();
-      _ffi.shutdown();
+      final ffi = _ffi;
+      if (ffi != null) {
+        _addLog('Stopping engine...');
+        ffi.stop();
+        ffi.shutdown();
+      }
 
       // Then stop the VpnService (closes the TUN fd)
       if (Platform.isAndroid) {
@@ -211,8 +254,8 @@ class AppService {
     }
 
     // Update running engine if connected
-    if (_vpnState == VpnState.connected) {
-      _ffi.updateConfig(config.toJsonString());
+    if (_vpnState == VpnState.connected && _ffi != null) {
+      _ffi!.updateConfig(config.toJsonString());
     }
   }
 
@@ -249,8 +292,10 @@ class AppService {
   void _startPolling() {
     _pollTimer?.cancel();
     _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      final ffi = _ffi;
+      if (ffi == null) return;
       try {
-        final nativeStats = _ffi.getStats();
+        final nativeStats = ffi.getStats();
         if (nativeStats != null) {
           _statsController.add(EngineStats(
             txBytes: nativeStats.txBytes,
@@ -265,8 +310,10 @@ class AppService {
       } catch (_) {}
 
       // Update logs
+      final ffi2 = _ffi;
+      if (ffi2 == null) return;
       try {
-        final logsJson = _ffi.getLogs();
+        final logsJson = ffi2.getLogs();
         if (logsJson != null && logsJson.isNotEmpty) {
           try {
             final parsed = jsonDecode(logsJson) as List;
