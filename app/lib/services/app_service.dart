@@ -95,7 +95,14 @@ class AppService {
       final initResult = _ffi.init(_config.toJsonString());
       if (initResult != 0) {
         _updateState(VpnState.error);
-        _addLog('Engine init failed ($initResult)');
+        _addLog('Engine init failed (code: $initResult)');
+        // Try to get Rust-side logs for more detail
+        try {
+          final logsJson = _ffi.getLogs();
+          if (logsJson != null && logsJson.isNotEmpty) {
+            _addLog('Rust logs: $logsJson');
+          }
+        } catch (_) {}
         return false;
       }
 

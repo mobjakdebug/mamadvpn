@@ -171,6 +171,15 @@ enum TlsConnectorBackend { rustls, custom;
     }
   }
 
+  String get rustName {
+    switch (this) {
+      case TlsConnectorBackend.rustls:
+        return 'rustls';
+      case TlsConnectorBackend.custom:
+        return 'custom';
+    }
+  }
+
   static TlsConnectorBackend fromString(String s) {
     switch (s.toLowerCase()) {
       case 'rustls':
@@ -196,6 +205,19 @@ enum TlsFingerprintKind { chrome, firefox, android, random;
         return 'Android';
       case TlsFingerprintKind.random:
         return 'Random';
+    }
+  }
+
+  String get rustName {
+    switch (this) {
+      case TlsFingerprintKind.chrome:
+        return 'chrome';
+      case TlsFingerprintKind.firefox:
+        return 'firefox';
+      case TlsFingerprintKind.android:
+        return 'android';
+      case TlsFingerprintKind.random:
+        return 'random';
     }
   }
 
@@ -387,8 +409,8 @@ class AppConfig {
     'tls_enabled': tlsEnabled,
     'tls_verify_certs': tlsVerifyCerts,
     'tls_alpn': tlsAlpn,
-    'tls_connector': tlsConnector.displayName.toLowerCase(),
-    'tls_fingerprint': tlsFingerprint.displayName.toLowerCase(),
+    'tls_connector': tlsConnector.rustName,
+    'tls_fingerprint': tlsFingerprint.rustName,
     'tls_sni': tlsSni,
   };
 
