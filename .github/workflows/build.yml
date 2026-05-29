@@ -51,17 +51,34 @@ jobs:
           $wdVersion = "2.2.2"
           $wdUrl = "https://www.reqrypt.org/download/WinDivert-$wdVersion-A.zip"
           $wdZip = "WinDivert.zip"
+          $wdExtractDir = "wd_extract"
 
           Write-Host "Downloading WinDivert v$wdVersion..."
           Invoke-WebRequest -Uri $wdUrl -OutFile $wdZip
 
           Write-Host "Extracting WinDivert..."
-          Expand-Archive -Path $wdZip -DestinationPath wd_extract -Force
+          Expand-Archive -Path $wdZip -DestinationPath $wdExtractDir -Force
 
-          # Copy required files to project root
-          Copy-Item "wd_extract\WinDivert.dll" -Destination "." -Force
-          Copy-Item "wd_extract\WinDivert64.sys" -Destination "." -Force
-          Copy-Item "wd_extract\x64\WinDivert.lib" -Destination "." -Force
+          # The zip contains a top-level folder (e.g. WinDivert-2.2.2-A/)
+          # with x64/ and x86/ subdirectories inside. Find and copy the files.
+          $archDir = "x64"
+          $dll = Get-ChildItem -Path $wdExtractDir -Recurse -Filter "WinDivert.dll" |
+                 Where-Object { $_.Directory.Name -eq $archDir } |
+                 Select-Object -First 1
+          $sys = Get-ChildItem -Path $wdExtractDir -Recurse -Filter "WinDivert64.sys" |
+                 Select-Object -First 1
+          $lib = Get-ChildItem -Path $wdExtractDir -Recurse -Filter "WinDivert.lib" |
+                 Where-Object { $_.Directory.Name -eq $archDir } |
+                 Select-Object -First 1
+
+          Write-Host "Found files:"
+          Write-Host "  DLL: $($dll.FullName)"
+          Write-Host "  SYS: $($sys.FullName)"
+          Write-Host "  LIB: $($lib.FullName)"
+
+          Copy-Item $dll.FullName -Destination "." -Force
+          Copy-Item $sys.FullName -Destination "." -Force
+          Copy-Item $lib.FullName -Destination "." -Force
 
           Write-Host "WinDivert files ready."
 
