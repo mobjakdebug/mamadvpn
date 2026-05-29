@@ -1,0 +1,105 @@
+name: Build Mamad VPN
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: mamad_vpn
+
+jobs:
+  build-windows:
+    name: Build Windows (Release)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          target: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-target-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-release-
+
+      - name: Download WinDivert driver files
+        shell: pwsh
+        run: |
+          $wdVersion = "2.2.2"
+          $wdUrl = "https://www.reqrypt.org/download/WinDivert-$wdVersion-A.zip"
+          $wdZip = "WinDivert.zip"
+
+          Write-Host "Downloading WinDivert v$wdVersion..."
+          Invoke-WebRequest -Uri $wdUrl -OutFile $wdZip
+
+          Write-Host "Extracting WinDivert..."
+          Expand-Archive -Path $wdZip -DestinationPath wd_extract -Force
+
+          # Copy required files to project root
+          Copy-Item "wd_extract\WinDivert.dll" -Destination "." -Force
+          Copy-Item "wd_extract\WinDivert64.sys" -Destination "." -Force
+          Copy-Item "wd_extract\x64\WinDivert.lib" -Destination "." -Force
+
+          Write-Host "WinDivert files ready."
+
+      - name: Build release binary
+        run: cargo build --release --verbose
+
+      - name: Prepare release artifacts
+        shell: pwsh
+        run: |
+          $releaseDir = "release"
+          New-Item -ItemType Directory -Force -Path $releaseDir
+
+          Copy-Item "target\release\$env:BINARY_NAME.exe" -Destination "$releaseDir\" -Force
+          Copy-Item "WinDivert.dll" -Destination "$releaseDir\" -Force
+          Copy-Item "WinDivert64.sys" -Destination "$releaseDir\" -Force
+
+          Write-Host "Release directory contents:"
+          Get-ChildItem $releaseDir | ForEach-Object { Write-Host "  $_" }
+
+      - name: Create deployment ZIP archive
+        shell: pwsh
+        run: |
+          $zipName = "$env:BINARY_NAME-windows-x86_64.zip"
+          Compress-Archive -Path "release\*" -DestinationPath $zipName -Force
+          Write-Host "Created: $zipName"
+
+      - name: Upload ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mamad_vpn-windows-x86_64
+          path: mamad_vpn-windows-x86_64.zip
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release (if tagged)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: mamad_vpn-windows-x86_64.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
