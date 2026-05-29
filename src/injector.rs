@@ -5,7 +5,7 @@
 //! as safe. The fake packet has a deliberately wrong TCP sequence number so the
 //! target server silently drops it, while the real traffic flows unimpeded.
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -16,6 +16,7 @@ use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use tokio::sync::Notify;
 use windivert::prelude::*;
+use windivert_sys::ChecksumFlags;
 
 // ── ClientHello template (ported from Python packet_templates.py) ──────────
 // The static parts of the TLS 1.2 ClientHello template are decoded once.
@@ -45,23 +46,21 @@ static TLS_CH_TEMPLATE: Lazy<Vec<u8>> =
     Lazy::new(|| hex::decode(TLS_CH_TEMPLATE_HEX).expect("Invalid TLS ClientHello template hex"));
 
 // Pre-sliced static parts from the template (offsets based on 6-byte SNI "mci.ir")
-// Using Vec<u8> instead of &[u8] to avoid lifetime inference issues with Lazy
 static STATIC1: Lazy<Vec<u8>> = Lazy::new(|| TLS_CH_TEMPLATE[..11].to_vec());
 static STATIC3: Lazy<Vec<u8>> = Lazy::new(|| TLS_CH_TEMPLATE[76..120].to_vec());
 static STATIC4: Lazy<Vec<u8>> = Lazy::new(|| TLS_CH_TEMPLATE[133..268].to_vec());
 
 /// Build a complete TLS 1.2 ClientHello packet with the given parameters.
-///
-/// * `rnd` – 32 random bytes for ClientRandom
-/// * `sess_id` – 32 bytes for Session ID
-/// * `target_sni` – SNI hostname to inject (the "fake" whitelisted SNI)
-/// * `key_share` – 32 bytes for the key share extension
-pub fn build_client_hello(rnd: &[u8], sess_id: &[u8], target_sni: &[u8], key_share: &[u8]) -> Vec<u8> {
+pub fn build_client_hello(
+    rnd: &[u8],
+    sess_id: &[u8],
+    target_sni: &[u8],
+    key_share: &[u8],
+) -> Vec<u8> {
     let static2: &[u8] = &[0x20];
     let static5: &[u8] = &[0x00, 0x15];
 
     // Build SNI extension dynamically
-    // Format: ext_len(2) + name_list_len(2) + name_type(1) + name_len(2) + name
     let sni_ext_len = (target_sni.len() + 5) as u16;
     let sni_inner_len = (target_sni.len() + 3) as u16;
     let mut server_name_ext = Vec::with_capacity(7 + target_sni.len());
@@ -79,19 +78,148 @@ pub fn build_client_hello(rnd: &[u8], sess_id: &[u8], target_sni: &[u8], key_sha
 
     // Assemble the full ClientHello (always 517 bytes regardless of SNI length)
     let mut result = Vec::with_capacity(517);
-    result.extend_from_slice(&STATIC1);          // 11 bytes
-    result.extend_from_slice(rnd);               // 32 bytes (offsets 11..43)
-    result.extend_from_slice(static2);           // 1 byte
-    result.extend_from_slice(sess_id);           // 32 bytes (offsets 44..76)
-    result.extend_from_slice(&STATIC3);          // 44 bytes (offsets 76..120)
-    result.extend_from_slice(&server_name_ext);  // 7 + len(sni) bytes
-    result.extend_from_slice(&STATIC4);          // 135 bytes
-    result.extend_from_slice(key_share);         // 32 bytes
-    result.extend_from_slice(static5);           // 2 bytes
-    result.extend_from_slice(&padding_ext);      // 2 + (219 - len(sni)) bytes
+    result.extend_from_slice(&STATIC1); // 11 bytes
+    result.extend_from_slice(rnd); // 32 bytes (offsets 11..43)
+    result.extend_from_slice(static2); // 1 byte
+    result.extend_from_slice(sess_id); // 32 bytes (offsets 44..76)
+    result.extend_from_slice(&STATIC3); // 44 bytes (offsets 76..120)
+    result.extend_from_slice(&server_name_ext); // 7 + len(sni) bytes
+    result.extend_from_slice(&STATIC4); // 135 bytes
+    result.extend_from_slice(key_share); // 32 bytes
+    result.extend_from_slice(static5); // 2 bytes
+    result.extend_from_slice(&padding_ext); // 2 + (219 - len(sni)) bytes
 
     debug_assert_eq!(result.len(), 517, "ClientHello must always be 517 bytes");
     result
+}
+
+// ── Manual IPv4/TCP header parsing ─────────────────────────────────────────
+// WinDivert 0.7.x provides raw packet bytes — we parse the headers ourselves.
+
+const IPV4_PROTOCOL_TCP: u8 = 6;
+
+struct IpHeader {
+    src_addr: Ipv4Addr,
+    dst_addr: Ipv4Addr,
+    ident: u16,
+    header_length: usize, // IHL * 4
+}
+
+/// Parse an IPv4 header from raw packet bytes.
+/// Returns `None` if the packet isn't IPv4 or doesn't contain TCP.
+fn parse_ipv4(data: &[u8]) -> Option<IpHeader> {
+    if data.len() < 20 {
+        return None;
+    }
+    let version_ihl = data[0];
+    let version = version_ihl >> 4;
+    let ihl = (version_ihl & 0x0f) as usize;
+    if version != 4 {
+        return None;
+    }
+    let header_length = ihl * 4;
+    if data.len() < header_length || data[9] != IPV4_PROTOCOL_TCP {
+        return None;
+    }
+    Some(IpHeader {
+        src_addr: Ipv4Addr::new(data[12], data[13], data[14], data[15]),
+        dst_addr: Ipv4Addr::new(data[16], data[17], data[18], data[19]),
+        ident: u16::from_be_bytes([data[4], data[5]]),
+        header_length,
+    })
+}
+
+struct TcpHeader {
+    src_port: u16,
+    dst_port: u16,
+    seq_num: u32,
+    ack_num: u32,
+    data_offset: usize, // TCP header length in bytes
+    syn: bool,
+    ack: bool,
+    rst: bool,
+    fin: bool,
+    psh: bool,
+}
+
+/// Parse a TCP header from raw packet bytes at the given IP header offset.
+fn parse_tcp(data: &[u8], ip_hdr_len: usize) -> Option<TcpHeader> {
+    let tcp_start = ip_hdr_len;
+    if data.len() < tcp_start + 20 {
+        return None;
+    }
+    let data_offset = ((data[tcp_start + 12] >> 4) as usize) * 4;
+    if data.len() < tcp_start + data_offset {
+        return None;
+    }
+    let flags = data[tcp_start + 13];
+    Some(TcpHeader {
+        src_port: u16::from_be_bytes([data[tcp_start], data[tcp_start + 1]]),
+        dst_port: u16::from_be_bytes([data[tcp_start + 2], data[tcp_start + 3]]),
+        seq_num: u32::from_be_bytes([
+            data[tcp_start + 4],
+            data[tcp_start + 5],
+            data[tcp_start + 6],
+            data[tcp_start + 7],
+        ]),
+        ack_num: u32::from_be_bytes([
+            data[tcp_start + 8],
+            data[tcp_start + 9],
+            data[tcp_start + 10],
+            data[tcp_start + 11],
+        ]),
+        data_offset,
+        syn: flags & 0x02 != 0,
+        ack: flags & 0x10 != 0,
+        rst: flags & 0x04 != 0,
+        fin: flags & 0x01 != 0,
+        psh: flags & 0x08 != 0,
+    })
+}
+
+/// Convenience struct holding the fields we inspect during connection tracking.
+struct PacketInfo {
+    is_inbound: bool,
+    syn: bool,
+    ack: bool,
+    rst: bool,
+    fin: bool,
+    seq_num: u32,
+    ack_num: u32,
+    payload_len: usize,
+    src_addr: Ipv4Addr,
+    dst_addr: Ipv4Addr,
+    src_port: u16,
+    dst_port: u16,
+    ip_header_len: usize,
+    tcp_header_len: usize,
+}
+
+/// Extract header info from raw IP+TCP packet bytes.
+fn extract_packet_info(data: &[u8], is_inbound: bool) -> Option<PacketInfo> {
+    let ip = parse_ipv4(data)?;
+    let tcp = parse_tcp(data, ip.header_length)?;
+    // Payload length = total packet length - IP header - TCP header
+    let payload_len = data
+        .len()
+        .saturating_sub(ip.header_length + tcp.data_offset);
+
+    Some(PacketInfo {
+        is_inbound,
+        syn: tcp.syn,
+        ack: tcp.ack,
+        rst: tcp.rst,
+        fin: tcp.fin,
+        seq_num: tcp.seq_num,
+        ack_num: tcp.ack_num,
+        payload_len,
+        src_addr: ip.src_addr,
+        dst_addr: ip.dst_addr,
+        src_port: tcp.src_port,
+        dst_port: tcp.dst_port,
+        ip_header_len: ip.header_length,
+        tcp_header_len: tcp.data_offset,
+    })
 }
 
 // ── Connection tracking ────────────────────────────────────────────────────
@@ -166,7 +294,6 @@ impl FakeInjectiveConnection {
 // ── The WinDivert packet injector ──────────────────────────────────────────
 
 /// Builds the WinDivert filter string for the given interface and target IPs.
-/// WinDivert filters MUST use IP addresses, not hostnames.
 pub fn build_filter(interface_ipv4: &str, connect_ip: &str) -> String {
     format!(
         "tcp and ((ip.SrcAddr == {} and ip.DstAddr == {}) or (ip.SrcAddr == {} and ip.DstAddr == {}))",
@@ -186,50 +313,37 @@ pub fn get_default_interface_ipv4() -> Option<Ipv4Addr> {
     }
 }
 
-/// Extract IPv4 and TCP header information common across windivert API variants.
-///
-/// Different versions of the `windivert` crate expose slightly different APIs.
-/// This helper abstracts the extraction so the rest of the logic is crate-agnostic.
-struct PacketInfo {
-    is_inbound: bool,
-    syn: bool,
-    ack: bool,
-    rst: bool,
-    fin: bool,
-    seq_num: u32,
-    ack_num: u32,
-    payload_len: u32,
-    src_addr: Ipv4Addr,
-    dst_addr: Ipv4Addr,
-    src_port: u16,
-    dst_port: u16,
-}
-
 /// The main WinDivert packet processing loop. Runs in a dedicated OS thread.
-///
-/// # Arguments
-/// * `filter` – WinDivert packet filter string.
-/// * `connections` – Shared connection map keyed by `(src_ip, src_port, dst_ip, dst_port)`.
 pub fn run_injector(
     filter: &str,
     connections: Arc<DashMap<ConnKey, FakeInjectiveConnection>>,
 ) -> Result<()> {
-    let wd = WinDivert::new(filter, windivert::Layer::Network, 0, 0)
+    let wd = WinDivert::network(filter, 0, Default::default())
         .context("Failed to open WinDivert handle")?;
 
-    loop {
-        let mut packet = wd.recv().context("WinDivert recv error")?;
+    let mut buf = vec![0u8; 65535];
 
-        let info = match extract_packet_info(&packet) {
-            Some(i) => i,
-            None => {
-                // Non-TCP or unparseable; pass through
-                let _ = wd.send(&packet, false);
+    loop {
+        let packet = match wd.recv(&mut buf) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("WinDivert recv error: {}", e);
                 continue;
             }
         };
 
-        let c_id: ConnKey = if info.is_inbound {
+        let is_inbound = !packet.address.outbound();
+
+        let info = match extract_packet_info(&packet.data, is_inbound) {
+            Some(i) => i,
+            None => {
+                // Non-TCP or unparseable; pass through
+                let _ = wd.send(&packet);
+                continue;
+            }
+        };
+
+        let c_id: ConnKey = if is_inbound {
             (info.dst_addr, info.dst_port, info.src_addr, info.src_port)
         } else {
             (info.src_addr, info.src_port, info.dst_addr, info.dst_port)
@@ -242,68 +356,31 @@ pub fn run_injector(
                     let guard = conn_ref.lock.lock().unwrap();
                     if !conn_ref.monitor.load(Ordering::Acquire) {
                         drop(guard);
-                        let _ = wd.send(&packet, false);
+                        let _ = wd.send(&packet);
                         continue;
                     }
                 }
                 // Lock released — handlers will re-acquire as needed.
-                // This is critical: `handle_outbound` does a sleep + re-lock,
-                // and `std::sync::Mutex` is NOT reentrant.
 
-                if info.is_inbound {
-                    handle_inbound(&wd, &mut packet, &info, &conn_ref);
+                if is_inbound {
+                    handle_inbound(&wd, &packet, &info, &conn_ref);
                 } else {
-                    handle_outbound(&wd, &mut packet, &info, &conn_ref);
+                    handle_outbound(&wd, &packet, &info, &conn_ref);
                 }
             }
             None => {
                 // Connection not tracked; pass through
-                let _ = wd.send(&packet, false);
+                let _ = wd.send(&packet);
             }
         }
-    }
-}
-
-/// Extract common header fields from a WinDivert packet.
-/// Abstracts over potential API differences between `windivert` crate versions.
-fn extract_packet_info(packet: &WinDivertPacket) -> Option<PacketInfo> {
-    let is_inbound = packet.is_inbound();
-
-    let ip_hdr = packet.get_ip_header().or_else(|| packet.get_ipv6_header())?;
-    let tcp = packet.get_tcp_header()?;
-
-    // Normalise IPv6-mapped IPv4 addresses back to Ipv4Addr
-    let src_addr = to_ipv4(ip_hdr.src_addr)?;
-    let dst_addr = to_ipv4(ip_hdr.dst_addr)?;
-
-    Some(PacketInfo {
-        is_inbound,
-        syn: tcp.syn,
-        ack: tcp.ack,
-        rst: tcp.rst,
-        fin: tcp.fin,
-        seq_num: tcp.seq_num,
-        ack_num: tcp.ack_num,
-        payload_len: tcp.payload_len as u32,
-        src_addr,
-        dst_addr,
-        src_port: tcp.src_port,
-        dst_port: tcp.dst_port,
-    })
-}
-
-fn to_ipv4(addr: IpAddr) -> Option<Ipv4Addr> {
-    match addr {
-        IpAddr::V4(v4) => Some(v4),
-        IpAddr::V6(v6) => v6.to_ipv4_mapped(),
     }
 }
 
 // ── Outbound packet handler ────────────────────────────────────────────────
 
 fn handle_outbound(
-    wd: &WinDivert,
-    packet: &mut WinDivertPacket,
+    wd: &WinDivert<NetworkLayer>,
+    packet: &WinDivertPacket<'_, NetworkLayer>,
     info: &PacketInfo,
     conn: &FakeInjectiveConnection,
 ) {
@@ -315,7 +392,9 @@ fn handle_outbound(
 
     if conn.sch_fake_sent.load(Ordering::Acquire) {
         on_unexpected_locked(
-            wd, packet, conn,
+            wd,
+            packet,
+            conn,
             "unexpected outbound packet, recv packet after fake sent!",
         );
         return;
@@ -324,13 +403,20 @@ fn handle_outbound(
     // ── Outbound SYN ──────────────────────────────────────────────────
     if info.syn && !info.ack && !info.rst && !info.fin && info.payload_len == 0 {
         if info.ack_num != 0 {
-            on_unexpected_locked(wd, packet, conn, "unexpected outbound syn packet, ack_num is not zero!");
+            on_unexpected_locked(
+                wd,
+                packet,
+                conn,
+                "unexpected outbound syn packet, ack_num is not zero!",
+            );
             return;
         }
         let existing = conn.syn_seq.load(Ordering::Acquire);
         if existing != -1 && existing as u32 != info.seq_num {
             on_unexpected_locked(
-                wd, packet, conn,
+                wd,
+                packet,
+                conn,
                 &format!(
                     "unexpected outbound syn packet, seq not matched! {} {}",
                     info.seq_num, existing
@@ -339,7 +425,7 @@ fn handle_outbound(
             return;
         }
         conn.syn_seq.store(info.seq_num as i64, Ordering::Release);
-        let _ = wd.send(packet, false);
+        let _ = wd.send(packet);
         return;
     }
 
@@ -350,7 +436,9 @@ fn handle_outbound(
 
         if syn_seq == -1 || (syn_seq as u32).wrapping_add(1) != info.seq_num {
             on_unexpected_locked(
-                wd, packet, conn,
+                wd,
+                packet,
+                conn,
                 &format!(
                     "unexpected outbound ack packet, seq not matched! {} {}",
                     info.seq_num, syn_seq
@@ -360,7 +448,9 @@ fn handle_outbound(
         }
         if syn_ack_seq == -1 || info.ack_num != (syn_ack_seq as u32).wrapping_add(1) {
             on_unexpected_locked(
-                wd, packet, conn,
+                wd,
+                packet,
+                conn,
                 &format!(
                     "unexpected outbound ack packet, ack not matched! {} {}",
                     info.ack_num, syn_ack_seq
@@ -370,7 +460,7 @@ fn handle_outbound(
         }
 
         // Forward the real ACK packet
-        let _ = wd.send(packet, false);
+        let _ = wd.send(packet);
         conn.sch_fake_sent.store(true, Ordering::Release);
 
         // Release the lock before sleeping (matches Python's thread-based approach)
@@ -389,7 +479,12 @@ fn handle_outbound(
         if conn.bypass_method == "wrong_seq" {
             inject_fake_packet(wd, packet, conn);
         } else {
-            on_unexpected_locked(wd, packet, conn, &format!("unknown bypass method: {}", conn.bypass_method));
+            on_unexpected_locked(
+                wd,
+                packet,
+                conn,
+                &format!("unknown bypass method: {}", conn.bypass_method),
+            );
         }
         return;
     }
@@ -400,8 +495,8 @@ fn handle_outbound(
 // ── Inbound packet handler ─────────────────────────────────────────────────
 
 fn handle_inbound(
-    wd: &WinDivert,
-    packet: &mut WinDivertPacket,
+    wd: &WinDivert<NetworkLayer>,
+    packet: &WinDivertPacket<'_, NetworkLayer>,
     info: &PacketInfo,
     conn: &FakeInjectiveConnection,
 ) {
@@ -423,7 +518,9 @@ fn handle_inbound(
         let syn_ack_seq = conn.syn_ack_seq.load(Ordering::Acquire);
         if syn_ack_seq != -1 && syn_ack_seq as u32 != info.seq_num {
             on_unexpected_locked(
-                wd, packet, conn,
+                wd,
+                packet,
+                conn,
                 &format!(
                     "unexpected inbound syn-ack packet, seq change! {} {}",
                     info.seq_num, syn_ack_seq
@@ -433,7 +530,9 @@ fn handle_inbound(
         }
         if info.ack_num != (syn_seq as u32).wrapping_add(1) {
             on_unexpected_locked(
-                wd, packet, conn,
+                wd,
+                packet,
+                conn,
                 &format!(
                     "unexpected inbound syn-ack packet, ack not matched! {} {}",
                     info.ack_num, syn_seq
@@ -441,20 +540,26 @@ fn handle_inbound(
             );
             return;
         }
-        conn.syn_ack_seq.store(info.seq_num as i64, Ordering::Release);
-        let _ = wd.send(packet, false);
+        conn.syn_ack_seq
+            .store(info.seq_num as i64, Ordering::Release);
+        let _ = wd.send(packet);
         return;
     }
 
     // ── Inbound ACK of fake data ──────────────────────────────────────
-    if info.ack && !info.syn && !info.rst && !info.fin
+    if info.ack
+        && !info.syn
+        && !info.rst
+        && !info.fin
         && info.payload_len == 0
         && conn.fake_sent.load(Ordering::Acquire)
     {
         let syn_ack_seq = conn.syn_ack_seq.load(Ordering::Acquire);
         if syn_ack_seq == -1 || (syn_ack_seq as u32).wrapping_add(1) != info.seq_num {
             on_unexpected_locked(
-                wd, packet, conn,
+                wd,
+                packet,
+                conn,
                 &format!(
                     "unexpected inbound ack packet, seq not matched! {} {}",
                     info.seq_num, syn_ack_seq
@@ -464,7 +569,9 @@ fn handle_inbound(
         }
         if info.ack_num != (syn_seq as u32).wrapping_add(1) {
             on_unexpected_locked(
-                wd, packet, conn,
+                wd,
+                packet,
+                conn,
                 &format!(
                     "unexpected inbound ack packet, ack not matched! {} {}",
                     info.ack_num, syn_seq
@@ -487,8 +594,8 @@ fn handle_inbound(
 // ── Error helper (caller MUST hold conn.lock) ──────────────────────────────
 
 fn on_unexpected_locked(
-    wd: &WinDivert,
-    packet: &WinDivertPacket,
+    wd: &WinDivert<NetworkLayer>,
+    packet: &WinDivertPacket<'_, NetworkLayer>,
     conn: &FakeInjectiveConnection,
     info: &str,
 ) {
@@ -496,7 +603,7 @@ fn on_unexpected_locked(
     conn.monitor.store(false, Ordering::Release);
     *conn.t2a_msg.lock().unwrap() = "unexpected_close".to_string();
     conn.t2a_notify.notify_one();
-    let _ = wd.send(packet, false);
+    let _ = wd.send(packet);
 }
 
 // ── Fake packet injection ──────────────────────────────────────────────────
@@ -509,51 +616,82 @@ fn on_unexpected_locked(
 /// number that is behind the expected window and silently drops it (no RST
 /// because the seq is within acceptable range, just not the next expected).
 ///
-/// # Arguments
-/// * `wd` – WinDivert handle for sending the injected packet.
-/// * `packet` – The original outbound ACK packet (modified in-place for injection).
-/// * `conn` – The tracked connection containing the fake `ClientHello` payload.
+/// We take the real ACK packet (which has no payload), clone its IP+TCP headers,
+/// append the fake ClientHello payload, and send with a deliberately wrong seq.
 pub fn inject_fake_packet(
-    wd: &WinDivert,
-    packet: &mut WinDivertPacket,
+    wd: &WinDivert<NetworkLayer>,
+    packet: &WinDivertPacket<'_, NetworkLayer>,
     conn: &FakeInjectiveConnection,
 ) {
     let syn_seq = conn.syn_seq.load(Ordering::Acquire) as u32;
     let fake_payload_len = conn.fake_data.len() as u32;
 
-    // Set PSH flag so the DPI firewall processes the payload immediately
-    packet.set_tcp_psh(true);
+    // Clone the borrowed packet so we can modify it
+    let mut owned = packet.clone().into_owned();
 
-    // Extend IP packet length to account for the fake payload
-    let old_ip_len = packet.get_ip_packet_len();
-    packet.set_ip_packet_len(old_ip_len + fake_payload_len as u16);
+    // ── Modify the cloned packet header & payload ────────────────────
+    // This block keeps the mutable borrow of `owned.data` scoped so it
+    // doesn't conflict with the subsequent `recalculate_checksums` call.
+    {
+        let data = owned.data.to_mut();
 
-    // Set the fake TLS ClientHello as the TCP payload
-    packet.set_tcp_payload(&conn.fake_data);
+        // ── Find IP header length first ──────────────────────────────
+        let ip_hdr_len = match parse_ipv4(data) {
+            Some(ip) => ip.header_length,
+            None => {
+                eprintln!("inject_fake_packet: failed to parse IPv4 header");
+                return;
+            }
+        };
+        let tcp_flags_byte = ip_hdr_len + 13;
+        if tcp_flags_byte >= data.len() {
+            eprintln!("inject_fake_packet: packet too short for TCP flags");
+            return;
+        }
+        data[tcp_flags_byte] |= 0x08; // Set PSH flag
 
-    // Increment IPv4 identification field (if IPv4)
-    if let Some(ipv4_hdr) = packet.get_ipv4_header() {
-        packet.set_ipv4_ident(ipv4_hdr.ident.wrapping_add(1) & 0xffff);
-    }
+        // ── Extend packet with the fake ClientHello payload ──────────
+        data.extend_from_slice(&conn.fake_data);
 
-    // ── THE CRITICAL WRONG SEQUENCE FORMULA ───────────────────────────
-    // seq = (syn_seq + 1 - payload_len) & 0xffffffff
-    //
-    // The sequence number is set BEHIND the expected next sequence number.
-    // The target server expects `syn_seq + 1` but receives a packet starting
-    // at `syn_seq + 1 - payload_len`. Since the sequence number is still
-    // within the receive window, the server silently drops the duplicate/
-    // out-of-order segment rather than sending a RST.
-    //
-    // Meanwhile, the DPI firewall has already processed the TLS ClientHello
-    // and cached this connection as "safe" based on the whitelisted SNI.
-    let wrong_seq = syn_seq.wrapping_add(1).wrapping_sub(fake_payload_len);
-    packet.set_tcp_seq_num(wrong_seq);
+        // ── Update IPv4 total length ─────────────────────────────────
+        let new_total_len = (data.len() as u16).to_be_bytes();
+        data[2] = new_total_len[0];
+        data[3] = new_total_len[1];
+
+        // ── Increment IPv4 identification ────────────────────────────
+        let old_ident = u16::from_be_bytes([data[4], data[5]]);
+        let new_ident = old_ident.wrapping_add(1) & 0xffff;
+        data[4] = (new_ident >> 8) as u8;
+        data[5] = (new_ident & 0xff) as u8;
+
+        // ── THE CRITICAL WRONG SEQUENCE FORMULA ───────────────────────
+        // seq = (syn_seq + 1 - payload_len) & 0xffffffff
+        //
+        // The sequence number is set BEHIND the expected next sequence number.
+        // The target server expects `syn_seq + 1` but receives a packet starting
+        // at `syn_seq + 1 - payload_len`. Since the sequence number is still
+        // within the receive window, the server silently drops the duplicate/
+        // out-of-order segment rather than sending a RST.
+        //
+        // Meanwhile, the DPI firewall has already processed the TLS ClientHello
+        // and cached this connection as "safe" based on the whitelisted SNI.
+        let wrong_seq = syn_seq.wrapping_add(1).wrapping_sub(fake_payload_len);
+        let tcp_seq_offset = ip_hdr_len + 4;
+        let seq_bytes = wrong_seq.to_be_bytes();
+        data[tcp_seq_offset] = seq_bytes[0];
+        data[tcp_seq_offset + 1] = seq_bytes[1];
+        data[tcp_seq_offset + 2] = seq_bytes[2];
+        data[tcp_seq_offset + 3] = seq_bytes[3];
+    } // `data` dropped → mutable borrow of `owned.data` released
 
     conn.fake_sent.store(true, Ordering::Release);
 
-    // Inject the fake packet (recalculate_checksum = true)
-    let _ = wd.send(packet, true);
+    // ── Recalculate checksums and send ───────────────────────────────
+    // ChecksumFlags::default() = 0 => recalculate all checksums (IP, TCP)
+    if let Err(e) = owned.recalculate_checksums(ChecksumFlags::default()) {
+        eprintln!("inject_fake_packet: checksum recalculation failed: {}", e);
+    }
+    let _ = wd.send(&owned);
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -575,7 +713,10 @@ mod tests {
         // Verify the SNI appears in the packet
         let sni_str = std::str::from_utf8(sni).unwrap();
         let ch_str = String::from_utf8_lossy(&ch);
-        assert!(ch_str.contains(sni_str), "ClientHello must contain the target SNI");
+        assert!(
+            ch_str.contains(sni_str),
+            "ClientHello must contain the target SNI"
+        );
 
         // Verify random bytes at offset 11
         assert_eq!(&ch[11..43], &rnd);
@@ -594,22 +735,26 @@ mod tests {
         assert_eq!(ch1.len(), 517);
 
         // Long SNI
-        let ch2 = build_client_hello(&rnd, &sess_id, b"very-long-subdomain.example.com", &key_share);
+        let ch2 = build_client_hello(
+            &rnd,
+            &sess_id,
+            b"very-long-subdomain.example.com",
+            &key_share,
+        );
         assert_eq!(ch2.len(), 517);
     }
 
     #[test]
     fn test_wrong_seq_formula() {
-        // Simulate the wrong_seq bitwise formula
         let syn_seq: u32 = 0x12345678;
         let payload_len: u32 = 517;
-        let expected = syn_seq.wrapping_add(1).wrapping_sub(payload_len);
+        let result = syn_seq.wrapping_add(1).wrapping_sub(payload_len);
         let python_style = (syn_seq.wrapping_add(1).wrapping_sub(payload_len)) & 0xffffffff;
 
-        assert_eq!(expected, python_style);
-        assert_ne!(expected, syn_seq.wrapping_add(1));
+        assert_eq!(result, python_style);
+        assert_ne!(result, syn_seq.wrapping_add(1));
         // The seq points BEFORE the expected next byte
-        assert!(expected < syn_seq.wrapping_add(1));
+        assert!(result < syn_seq.wrapping_add(1));
     }
 
     #[test]
@@ -622,8 +767,76 @@ mod tests {
 
     #[test]
     fn test_lazy_template_loaded() {
-        // Force evaluation of the Lazy
         let _ = &*TLS_CH_TEMPLATE;
         assert_eq!(TLS_CH_TEMPLATE.len(), 517);
+    }
+
+    #[test]
+    fn test_parse_ipv4() {
+        // Build a minimal IPv4 packet with TCP
+        let mut pkt = vec![
+            0x45, 0x00, 0x00, 0x28, // Version=4, IHL=5, Total Length=40
+            0xab, 0xcd, 0x40, 0x00, // ID=0xabcd, flags=0x40, frag_offset=0
+            0x40, 0x06, 0x00, 0x00, // TTL=64, Protocol=TCP=6, checksum=0
+            0xc0, 0xa8, 0x01, 0x64, // Src=192.168.1.100
+            0x08, 0x08, 0x08, 0x08, // Dst=8.8.8.8
+        ];
+        // Append a minimal TCP header (20 bytes)
+        pkt.extend_from_slice(&[
+            0x1f, 0x90, 0x00, 0x50, // src_port=8080, dst_port=80
+            0x00, 0x00, 0x00, 0x01, // seq_num=1
+            0x00, 0x00, 0x00, 0x00, // ack_num=0
+            0x50, 0x02, 0x71, 0x10, // data_offset=5, SYN=1, win=28944
+            0x00, 0x00, 0x00, 0x00, // checksum=0, urg_ptr=0
+        ]);
+
+        let ip = parse_ipv4(&pkt).expect("Should parse IPv4 header");
+        assert_eq!(ip.src_addr, Ipv4Addr::new(192, 168, 1, 100));
+        assert_eq!(ip.dst_addr, Ipv4Addr::new(8, 8, 8, 8));
+        assert_eq!(ip.ident, 0xabcd);
+        assert_eq!(ip.header_length, 20);
+
+        let tcp = parse_tcp(&pkt, ip.header_length).expect("Should parse TCP header");
+        assert_eq!(tcp.src_port, 8080);
+        assert_eq!(tcp.dst_port, 80);
+        assert_eq!(tcp.seq_num, 1);
+        assert!(tcp.syn);
+        assert!(!tcp.ack);
+        assert!(!tcp.psh);
+        assert!(!tcp.fin);
+        assert!(!tcp.rst);
+    }
+
+    #[test]
+    fn test_extract_packet_info() {
+        // Build a SYN-ACK packet (inbound)
+        let mut pkt = vec![
+            0x45, 0x00, 0x00, 0x28, // Version=4, IHL=5, Total Length=40
+            0x00, 0x01, 0x40, 0x00, // ID=1
+            0x40, 0x06, 0x00, 0x00, // TTL=64, TCP
+            0x08, 0x08, 0x08, 0x08, // Src=8.8.8.8
+            0xc0, 0xa8, 0x01, 0x64, // Dst=192.168.1.100
+        ];
+        pkt.extend_from_slice(&[
+            0x00, 0x50, 0x1f, 0x90, // src=80, dst=8080
+            0x00, 0x00, 0xab, 0xcd, // seq=43981
+            0x00, 0x00, 0x00, 0x02, // ack=2
+            0x50, 0x12, 0x71, 0x10, // data_offset=5, SYN+ACK
+            0x00, 0x00, 0x00, 0x00,
+        ]);
+
+        let info = extract_packet_info(&pkt, false).expect("Should parse packet info");
+        assert_eq!(info.src_addr, Ipv4Addr::new(8, 8, 8, 8));
+        assert_eq!(info.dst_addr, Ipv4Addr::new(192, 168, 1, 100));
+        assert_eq!(info.src_port, 80);
+        assert_eq!(info.dst_port, 8080);
+        assert_eq!(info.seq_num, 43981);
+        assert_eq!(info.ack_num, 2);
+        assert!(info.syn);
+        assert!(info.ack);
+        assert!(!info.rst);
+        assert!(!info.fin);
+        assert_eq!(info.payload_len, 0);
+        assert!(!info.is_inbound);
     }
 }
